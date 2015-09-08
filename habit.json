@@ -1,0 +1,17 @@
+{
+    "events": [
+        {
+            "hour": 13,
+            "message": "昼の薬"
+        }
+    ],
+    "notify_interval": 10,
+    "notify_count": 3,
+    "check_interval": 3,
+    "format": "@yuntan_t {message} {time}",
+    "reply_ok": ["OK", "やった", "飲んだ", "完了", "はい"],
+    "reply_ng": ["NG", "うるさい", "やめる"],
+    "target_user": "yuntan_t",
+    "access_token": "***",
+    "access_token_secret": "***"
+}
