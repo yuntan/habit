@@ -26,22 +26,20 @@ func main() {
 	b, err := ioutil.ReadFile(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("config file (%s) not found.", SETTING_DIR)
+			log.Fatalf("config file (%s) not found.", SETTING_DIR)
 		} else {
-			log.Println(err)
+			log.Fatalln(err)
 		}
-		os.Exit(1)
 	}
 
 	if err := json.Unmarshal(b, &settings); err != nil {
-		log.Println(err)
-		os.Exit(1)
+		log.Fatalln(err)
 	}
 
 	// show event info
 	log.Println("registered events:")
-	for _, ev := range settings.Events {
-		log.Printf("%d %s\n", ev.Hour, ev.Message)
+	for _, hb := range settings.Habits {
+		log.Printf("%d %s\n", hb.Hour, hb.Message)
 	}
 	log.Println()
 
@@ -50,14 +48,39 @@ func main() {
 		TokenSecret: settings.AccessTokenSecret,
 	}
 
-	for { // main loop
-		checkReply()
-		processEvents()
-		time.Sleep(time.Duration(settings.CheckInterval) * time.Minute)
+	select {
+	case <-time.Tick(time.Hour):
+		for _, habit := range settings.Habits {
+			if time.Now().Hour() == habit.Hour {
+				go processHabit(habit)
+			}
+		}
 	}
 }
 
-func checkReply() {
+func processHabit(habit Habit) {
+	count := 0
+	ok := false
+
+	select {
+	case <-time.Tick(time.Duration(settings.CheckInterval) * time.Minute):
+		if res, suc := checkReply(habit); suc {
+			ok = res
+			break
+		}
+
+	case <-time.Tick(time.Duration(settings.NotifyInterval) * time.Minute):
+		if count > settings.NotifyCount {
+			break
+		}
+		notify(habit)
+		count++
+	}
+
+	_ = ok // TODO save log
+}
+
+func checkReply(habit Habit) (result, success bool) {
 	log.Println("checking replies...")
 
 	resp, err := tw.GetMentions(token)
@@ -73,7 +96,10 @@ func checkReply() {
 	dec := json.NewDecoder(resp.Body)
 	defer resp.Body.Close()
 	var data []map[string]interface{}
-	dec.Decode(&data) // TODO error
+	dec.Decode(&data)
+	if len(data) == 0 {
+		return
+	}
 	id := data[0]["id_str"].(string)
 	name := data[0]["user"].(map[string]interface{})["screen_name"].(string)
 	text := data[0]["text"].(string)
@@ -91,65 +117,43 @@ func checkReply() {
 		return
 	}
 
-	now := time.Now()
-	for _, ev := range settings.Events {
-		switch {
-		case now.Hour() < ev.Hour:
-			ev.next = now.Truncate(24 * time.Hour).Add(time.Duration(ev.Hour) * time.Hour)
-
-		case now.Hour() > ev.Hour:
-			ev.next = now.Truncate(24 * time.Hour).Add(time.Duration(24+ev.Hour) * time.Hour)
-
-		default:
-			for _, sub := range settings.ReplyOK {
-				if strings.Contains(text, sub) {
-					log.Printf("OK for %d %s\n", ev.Hour, ev.Message)
-					// TODO save log
-					ev.next = now.Truncate(time.Hour).Add(24 * time.Hour)
-					log.Println("next nofify time: ", ev.next.Format(time.Stamp))
-					return
-				}
-			}
-			for _, sub := range settings.ReplyNG {
-				if strings.Contains(text, sub) {
-					log.Printf("NG for %d %s\n", ev.Hour, ev.Message)
-					// TODO save log
-					ev.next = now.Truncate(time.Hour).Add(24 * time.Hour)
-					log.Println("next nofify time: ", ev.next.Format(time.Stamp))
-					return
-				}
-			}
-
-			ev.next = now.Add(time.Duration(settings.NotifyInterval) * time.Minute)
+	for _, sub := range settings.ReplyOK {
+		if strings.Contains(text, sub) {
+			log.Printf("OK for %d %s\n", habit.Hour, habit.Message)
+			success = true
+			result = true
+			return
 		}
 	}
+	for _, sub := range settings.ReplyNG {
+		if strings.Contains(text, sub) {
+			log.Printf("NG for %d %s\n", habit.Hour, habit.Message)
+			success = true
+			result = false
+			return
+		}
+	}
+	return
 }
 
-func processEvents() {
-	for _, ev := range settings.Events {
-		now := time.Now()
-		if now.Before(ev.next) {
-			continue
-		}
-
-		log.Printf("processing evet %d %s...\n", ev.Hour, ev.Message)
-		tweet := strings.Replace(settings.Format, "{message}", ev.Message, 1)
-		tweet = strings.Replace(tweet, "{time}", now.Format(time.Kitchen), 1)
-		resp, err := tw.Tweet(tweet, token)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		if resp.StatusCode/100 != 2 {
-			log.Println("status: ", resp.StatusCode)
-			return
-		}
-
-		dec := json.NewDecoder(resp.Body)
-		defer resp.Body.Close()
-		var data map[string]interface{}
-		dec.Decode(&data) // TODO error
-		id := data["id_str"].(string)
-		lastTweetID = append(lastTweetID, id)
+func notify(habit Habit) (id string, success bool) {
+	log.Printf("notify %d %s...\n", habit.Hour, habit.Message)
+	tweet := strings.Replace(settings.Format, "{message}", habit.Message, 1)
+	tweet = strings.Replace(tweet, "{time}", time.Now().Format(time.Kitchen), 1)
+	resp, err := tw.Tweet(tweet, token)
+	if err != nil {
+		log.Println(err)
+		return
 	}
+	if resp.StatusCode/100 != 2 {
+		log.Println("status: ", resp.StatusCode)
+		return
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	defer resp.Body.Close()
+	var data map[string]interface{}
+	dec.Decode(&data) // TODO error
+	id = data["id_str"].(string)
+	return
 }
