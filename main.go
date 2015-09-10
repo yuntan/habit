@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -43,15 +44,27 @@ func main() {
 	}
 	log.Println()
 
+	tw.Config = &oauth1.Config{
+		ConsumerKey:    CONSUMER_KEY,
+		ConsumerSecret: CONSUMER_SECRET,
+	}
+
 	token = &oauth1.Token{
 		Token:       settings.AccessToken,
 		TokenSecret: settings.AccessTokenSecret,
 	}
 
-	select {
-	case <-time.Tick(time.Hour):
+	lastHour := -1
+	tick := time.Tick(time.Minute)
+	for now := range tick {
+		_ = "breakpoint"
+		if now.Hour() == lastHour {
+			continue
+		}
+		lastHour = now.Hour()
+
 		for _, habit := range settings.Habits {
-			if time.Now().Hour() == habit.Hour {
+			if now.Hour() == habit.Hour {
 				go processHabit(habit)
 			}
 		}
@@ -59,25 +72,40 @@ func main() {
 }
 
 func processHabit(habit Habit) {
+	log.Printf("processing habit %d...\n", habit.Hour)
 	count := 0
 	ok := false
 
-	select {
-	case <-time.Tick(time.Duration(settings.CheckInterval) * time.Minute):
-		if res, suc := checkReply(habit); suc {
-			ok = res
-			break
-		}
+	tickc := time.Tick(time.Duration(settings.CheckInterval) * time.Minute)
+	tickn := time.Tick(time.Duration(settings.NotifyInterval) * time.Minute)
 
-	case <-time.Tick(time.Duration(settings.NotifyInterval) * time.Minute):
-		if count > settings.NotifyCount {
-			break
+	notify(habit)
+	count++
+
+loop:
+	for {
+		select {
+		case <-tickc:
+			if res, suc := checkReply(habit); suc {
+				ok = res
+				break loop
+			}
+
+		case <-tickn:
+			if count > settings.NotifyCount {
+				break loop
+			}
+			notify(habit)
+			count++
 		}
-		notify(habit)
-		count++
 	}
 
-	_ = ok // TODO save log
+	if ok {
+		log.Printf("%d OK\n", habit.Hour)
+	} else {
+		log.Printf("%d NG\n", habit.Hour)
+	}
+	// TODO save log
 }
 
 func checkReply(habit Habit) (result, success bool) {
@@ -137,8 +165,10 @@ func checkReply(habit Habit) (result, success bool) {
 }
 
 func notify(habit Habit) (id string, success bool) {
-	log.Printf("notify %d %s...\n", habit.Hour, habit.Message)
-	tweet := strings.Replace(settings.Format, "{message}", habit.Message, 1)
+	message := habit.Message[rand.Intn(len(habit.Message))]
+	log.Printf("notify %d %s...\n", habit.Hour, message)
+
+	tweet := strings.Replace(settings.Format, "{message}", message, 1)
 	tweet = strings.Replace(tweet, "{time}", time.Now().Format(time.Kitchen), 1)
 	resp, err := tw.Tweet(tweet, token)
 	if err != nil {

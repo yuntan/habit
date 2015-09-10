@@ -16,6 +16,6 @@ type Settings struct {
 }
 
 type Habit struct {
-	Hour    int    `json:"hour"` // 24 tense
-	Message string `json:"message"`
+	Hour    int      `json:"hour"` // 24 tense
+	Message []string `json:"message"`
 }

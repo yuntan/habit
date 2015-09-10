@@ -2,7 +2,7 @@
     "habits": [
         {
             "hour": 13,
-            "message": "昼の薬"
+            "message": ["昼の薬", "お薬"]
         }
     ],
     "notify_interval": 10,
